@@ -1461,6 +1461,7 @@ struct object_context {
 #define GET_OID_RECORD_PATH     0200
 #define GET_OID_ONLY_TO_DIE    04000
 #define GET_OID_REQUIRE_PATH  010000
+#define GET_OID_GENTLY        020000
 
 #define GET_OID_DISAMBIGUATORS \
 	(GET_OID_COMMIT | GET_OID_COMMITTISH | \
@@ -1687,6 +1688,12 @@ struct ident_split {
  * if the input lacks timestamp and zone
  */
 int split_ident_line(struct ident_split *, const char *, int);
+
+/*
+ * Given a commit or tag object buffer and the commit or tag headers, replaces
+ * the idents in the headers with their canonical versions using the mailmap mechanism.
+ */
+void apply_mailmap_to_header(struct strbuf *, const char **, struct string_list *);
 
 /*
  * Compare split idents for equality or strict ordering. Note that we

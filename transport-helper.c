@@ -33,7 +33,8 @@ struct helper_data {
 		check_connectivity : 1,
 		no_disconnect_req : 1,
 		no_private_update : 1,
-		object_format : 1;
+		object_format : 1,
+		get : 1;
 
 	/*
 	 * As an optimization, the transport code may invoke fetch before
@@ -210,6 +211,8 @@ static struct child_process *get_helper(struct transport *transport)
 			data->no_private_update = 1;
 		} else if (starts_with(capname, "object-format")) {
 			data->object_format = 1;
+		} else if (!strcmp(capname, "get")) {
+			data->get = 1;
 		} else if (mandatory) {
 			die(_("unknown mandatory capability %s; this remote "
 			      "helper probably needs newer version of Git"),
@@ -686,12 +689,15 @@ static int fetch_refs(struct transport *transport,
 
 	/*
 	 * If we reach here, then the server, the client, and/or the transport
-	 * helper does not support protocol v2. --negotiate-only requires
-	 * protocol v2.
+	 * helper does not support protocol v2. --negotiate-only and --object-info
+	 * require protocol v2.
 	 */
 	if (data->transport_options.acked_commits) {
 		warning(_("--negotiate-only requires protocol v2"));
 		return -1;
+	}
+	if (transport->smart_options->object_info) {
+		die(_("--object-info requires protocol v2"));
 	}
 
 	if (!data->get_refs_list_called)

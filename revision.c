@@ -33,6 +33,7 @@
 #include "bloom.h"
 #include "json-writer.h"
 #include "list-objects-filter-options.h"
+#include "resolve-undo.h"
 
 volatile show_early_output_fn_t show_early_output;
 
@@ -1696,6 +1697,39 @@ static void add_cache_tree(struct cache_tree *it, struct rev_info *revs,
 
 }
 
+static void add_resolve_undo_to_pending(struct index_state *istate, struct rev_info *revs)
+{
+	struct string_list_item *item;
+	struct string_list *resolve_undo = istate->resolve_undo;
+
+	if (!resolve_undo)
+		return;
+
+	for_each_string_list_item(item, resolve_undo) {
+		const char *path = item->string;
+		struct resolve_undo_info *ru = item->util;
+		int i;
+
+		if (!ru)
+			continue;
+		for (i = 0; i < 3; i++) {
+			struct blob *blob;
+
+			if (!ru->mode[i] || !S_ISREG(ru->mode[i]))
+				continue;
+
+			blob = lookup_blob(revs->repo, &ru->oid[i]);
+			if (!blob) {
+				warning(_("resolve-undo records `%s` which is missing"),
+					oid_to_hex(&ru->oid[i]));
+				continue;
+			}
+			add_pending_object_with_path(revs, &blob->object, "",
+						     ru->mode[i], path);
+		}
+	}
+}
+
 static void do_add_index_objects_to_pending(struct rev_info *revs,
 					    struct index_state *istate,
 					    unsigned int flags)
@@ -1724,6 +1758,8 @@ static void do_add_index_objects_to_pending(struct rev_info *revs,
 		add_cache_tree(istate->cache_tree, revs, &path, flags);
 		strbuf_release(&path);
 	}
+
+	add_resolve_undo_to_pending(istate, revs);
 }
 
 void add_index_objects_to_pending(struct rev_info *revs, unsigned int flags)
@@ -3755,51 +3791,6 @@ int rewrite_parents(struct rev_info *revs, struct commit *commit,
 	return 0;
 }
 
-static int commit_rewrite_person(struct strbuf *buf, const char *what, struct string_list *mailmap)
-{
-	char *person, *endp;
-	size_t len, namelen, maillen;
-	const char *name;
-	const char *mail;
-	struct ident_split ident;
-
-	person = strstr(buf->buf, what);
-	if (!person)
-		return 0;
-
-	person += strlen(what);
-	endp = strchr(person, '\n');
-	if (!endp)
-		return 0;
-
-	len = endp - person;
-
-	if (split_ident_line(&ident, person, len))
-		return 0;
-
-	mail = ident.mail_begin;
-	maillen = ident.mail_end - ident.mail_begin;
-	name = ident.name_begin;
-	namelen = ident.name_end - ident.name_begin;
-
-	if (map_user(mailmap, &mail, &maillen, &name, &namelen)) {
-		struct strbuf namemail = STRBUF_INIT;
-
-		strbuf_addf(&namemail, "%.*s <%.*s>",
-			    (int)namelen, name, (int)maillen, mail);
-
-		strbuf_splice(buf, ident.name_begin - buf->buf,
-			      ident.mail_end - ident.name_begin + 1,
-			      namemail.buf, namemail.len);
-
-		strbuf_release(&namemail);
-
-		return 1;
-	}
-
-	return 0;
-}
-
 static int commit_match(struct commit *commit, struct rev_info *opt)
 {
 	int retval;
@@ -3832,11 +3823,12 @@ static int commit_match(struct commit *commit, struct rev_info *opt)
 		strbuf_addstr(&buf, message);
 
 	if (opt->grep_filter.header_list && opt->mailmap) {
+		const char *commit_headers[] = { "author ", "committer ", NULL };
+
 		if (!buf.len)
 			strbuf_addstr(&buf, message);
 
-		commit_rewrite_person(&buf, "\nauthor ", opt->mailmap);
-		commit_rewrite_person(&buf, "\ncommitter ", opt->mailmap);
+		apply_mailmap_to_header(&buf, commit_headers, opt->mailmap);
 	}
 
 	/* Append "fake" message parts as needed */
